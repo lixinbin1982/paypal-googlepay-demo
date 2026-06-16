@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ben's Shop - Google Pay + 3DS Demo</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; display: flex; justify-content: center; padding: 40px 16px; }
+    .container { max-width: 500px; width: 100%; }
+    .card { background: white; border-radius: 16px; padding: 24px; margin-bottom: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    h1 { font-size: 24px; margin-bottom: 8px; }
+    .item { display: flex; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid #eee; }
+    .item:last-child { border-bottom: none; }
+    .total { font-size: 20px; font-weight: 600; padding-top: 16px; text-align: right; }
+    .label { color: #666; font-size: 14px; margin-bottom: 8px; }
+    #msg { margin-top: 16px; padding: 12px; border-radius: 8px; display: none; font-size: 14px; }
+    .success { background: #d4edda; color: #155724; display: block !important; }
+    .error { background: #f8d7da; color: #721c24; display: block !important; }
+    .info { background: #d1ecf1; color: #0c5460; display: block !important; }
+    .log-box { background: #f0f0f0; border-radius: 8px; padding: 12px; font-family: monospace; font-size: 12px; max-height: 200px; overflow-y: auto; white-space: pre-wrap; margin-top: 8px; display: none; }
+    .btn-trace { margin-top: 12px; padding: 6px 12px; font-size: 12px; border: 1px solid #ccc; border-radius: 6px; background: white; cursor: pointer; }
+    .btn-trace:hover { background: #eee; }
+    #gp-container { min-height: 48px; display: flex; align-items: center; justify-content: center; }
+    .status-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+    .badge-idle { background: #e2e3e5; color: #383d41; }
+    .badge-running { background: #cce5ff; color: #004085; }
+    .badge-3ds { background: #fff3cd; color: #856404; }
+    .badge-done { background: #d4edda; color: #155724; }
+    .badge-fail { background: #f8d7da; color: #721c24; }
+    .badge-skip { background: #e2e3e5; color: #6c757d; }
+    #status-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+
+    /* 3DS Overlay */
+    #threeds-overlay {
+      display: none;
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.45); z-index: 9999;
+      align-items: center; justify-content: center;
+    }
+    #threeds-overlay.active { display: flex; }
+    #threeds-overlay .modal-box {
+      background: white; border-radius: 16px; width: 420px; max-width: 90vw;
+      box-shadow: 0 12px 48px rgba(0,0,0,0.25); overflow: hidden;
+    }
+    #threeds-overlay .modal-header {
+      background: #1a1a2e; color: white; padding: 20px 24px;
+      display: flex; align-items: center; gap: 12px;
+    }
+    #threeds-overlay .modal-header h3 { margin: 0; font-size: 16px; font-weight: 600; }
+    #threeds-overlay .modal-body { padding: 24px; min-height: 200px; }
+    #threeds-overlay .modal-body #threeds-iframe-container iframe {
+      width: 100%; height: 280px; border: none; border-radius: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <h1>Ben's Shop 🛒</h1>
+      <p style="color:#666;margin:4px 0 16px">Google Pay + 3DS | PayPal Sandbox</p>
+      <div class="item"><span>📱 iPhone 16 Pro Max</span><span>$499</span></div>
+      <div class="item"><span>🎧 AirPods Pro</span><span>$99</span></div>
+      <div class="item"><span>🔌 USB-C Charger</span><span>$19.99</span></div>
+      <div class="total">Total: $132.97</div>
+      <p style="font-size:12px;color:#999;margin-top:8px">Currency: USD | Intent: CAPTURE</p>
+    </div>
+
+    <div class="card">
+      <div id="status-bar">
+        <span id="step1-status" class="status-badge badge-idle">① Config</span>
+        <span id="step2-status" class="status-badge badge-idle">② Pay</span>
+        <span id="step3-status" class="status-badge badge-idle">③ Confirm</span>
+        <span id="step4-status" class="status-badge badge-idle">④ 3DS</span>
+        <span id="step5-status" class="status-badge badge-idle">⑤ Done</span>
+      </div>
+
+      <p class="label">Pay with Google Pay</p>
+      <div id="gp-container">
+        <p style="color:#999;font-size:13px">Loading Google Pay...</p>
+      </div>
+      <div id="msg"></div>
+      <button class="btn-trace" id="traceBtn" onclick="toggleTrace()">Show Debug Log</button>
+      <div class="log-box" id="logBox"></div>
+    </div>
+  </div>
+
+  <!-- 3DS Overlay (real) -->
+  <div id="threeds-overlay">
+    <div class="modal-box">
+      <div class="modal-header">
+        <span style="font-size:20px;">🔒</span>
+        <h3>3D Secure Authentication</h3>
+      </div>
+      <div class="modal-body">
+        <div id="threeds-iframe-container">
+          <p style="color:#999;text-align:center;padding:60px 0;">Loading 3DS challenge...</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Google Pay JS -->
+  <script src="https://pay.google.com/gp/p/js/pay.js"></script>
+
+  <!-- PayPal JS SDK (for 3DS component) -->
+  <script src="https://www.paypal.com/sdk/js?client-id=AVJ64pXVas3BtB-YrVVMFfCAZx2r2RlEjn0TwRtpGGNxqhhR-DRILDWX8gONSh-jSgunDQucOrVplXtm&components=buttons,three-domain-secure&intent=capture&currency=USD"
+    data-sdk-integration-source="demo"
+    data-namespace="paypalSdk">
+  </script>
+
+  <script>
+    let logLines = [];
+    let orderId = null;
+
+    function log(text) { 
+      logLines.push('[' + new Date().toLocaleTimeString() + '] ' + text);
+      console.log('[GPay+3DS]', text);
+      const lb = document.getElementById('logBox');
+      lb.textContent = logLines.join('\n');
+      lb.scrollTop = lb.scrollHeight;
+    }
+    function toggleTrace() {
+      const lb = document.getElementById('logBox');
+      lb.style.display = lb.style.display === 'block' ? 'none' : 'block';
+    }
+    function msg(text, type) { 
+      const m = document.getElementById('msg');
+      m.textContent = text; m.className = type; 
+      log('[' + type + '] ' + text);
+    }
+    function setStep(n, status, label) {
+      const el = document.getElementById('step' + n + '-status');
+      if (!el) return;
+      const cls = status === 'done' ? 'badge-done' :
+                  status === 'running' ? 'badge-running' :
+                  status === '3ds' ? 'badge-3ds' :
+                  status === 'fail' ? 'badge-fail' :
+                  status === 'skip' ? 'badge-skip' : 'badge-idle';
+      el.className = 'status-badge ' + cls;
+      if (label) el.textContent = label;
+    }
+
+    function waitFor3DS(maxWait = 20000) {
+      return new Promise((resolve, reject) => {
+        if (window.paypalSdk?.ThreeDomainSecure) return resolve(window.paypalSdk.ThreeDomainSecure);
+        const check = setInterval(() => {
+          if (window.paypalSdk?.ThreeDomainSecure) {
+            clearInterval(check); clearTimeout(timer);
+            resolve(window.paypalSdk.ThreeDomainSecure);
+          }
+        }, 200);
+        const timer = setTimeout(() => {
+          clearInterval(check);
+          reject(new Error('3DS component not loaded'));
+        }, maxWait);
+      });
+    }
+
+    document.addEventListener('DOMContentLoaded', async () => {
+      // ── Step 1 ──
+      setStep(1, 'running', '① Config');
+      log('Fetching Google Pay config...');
+      let gpayConfig;
+      try {
+        const res = await fetch('/api/gpay-config');
+        const data = await res.json();
+        if (data.errors) throw new Error(data.errors[0]?.message || 'Config error');
+        gpayConfig = data.data?.googlePayConfig;
+        if (!gpayConfig) throw new Error('No config returned');
+        if (!gpayConfig.isEligible) throw new Error('Not eligible');
+        log('GPay eligible ✓');
+        setStep(1, 'done', '① Config ✓');
+      } catch (err) {
+        msg('❌ ' + err.message, 'error');
+        setStep(1, 'fail', '① Config ✗');
+        return;
+      }
+
+      const gpayClient = new google.payments.api.PaymentsClient({ environment: 'TEST' });
+
+      try {
+        const isReady = await gpayClient.isReadyToPay({
+          apiVersion: gpayConfig.apiVersion || 2,
+          apiVersionMinor: gpayConfig.apiVersionMinor || 0,
+          allowedPaymentMethods: gpayConfig.allowedPaymentMethods,
+        });
+        if (!isReady.result) {
+          msg('No saved card. Add in Chrome Settings > Payment methods.', 'info');
+          return;
+        }
+      } catch (err) {
+        msg('❌ isReadyToPay error: ' + err.message, 'error');
+        return;
+      }
+
+      const paymentDataRequest = {
+        apiVersion: gpayConfig.apiVersion || 2,
+        apiVersionMinor: gpayConfig.apiVersionMinor || 0,
+        allowedPaymentMethods: gpayConfig.allowedPaymentMethods,
+        merchantInfo: gpayConfig.merchantInfo,
+        transactionInfo: {
+          countryCode: gpayConfig.countryCode || 'US',
+          totalPriceStatus: 'FINAL',
+          totalPrice: '132.97',
+          currencyCode: 'USD',
+        },
+      };
+
+      // ── Render button ──
+      const button = gpayClient.createButton({
+        onClick: async () => {
+          try {
+            setStep(2, 'running', '② Pay');
+            msg('⏳ Processing Google Pay...', 'info');
+
+            const paymentData = await gpayClient.loadPaymentData(paymentDataRequest);
+            log('GPay token ✓');
+            setStep(2, 'done', '② Pay ✓');
+            setStep(3, 'running', '③ Confirm');
+
+            msg('⏳ Creating order...', 'info');
+            const orderRes = await fetch('/api/create-order', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ amount: '132.97', currency: 'USD' })
+            });
+            const order = await orderRes.json();
+            orderId = order.id;
+            log('Order: ' + orderId);
+
+            // ── Confirm GPay: Use GraphQL mutation (PayPal SDK's approach) ──
+            msg('⏳ Confirming GPay payment via GraphQL...', 'info');
+            const gqlRes = await fetch('/api/confirm-gpay', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                orderId,
+                paymentMethodData: paymentData.paymentMethodData,
+              })
+            });
+            const confirmData = await gqlRes.json();
+            log('=== GraphQL confirm response ===');
+            log(JSON.stringify(confirmData, null, 2));
+            log('=== END ===');
+            setStep(3, 'done', '③ Confirm ✓');
+            if (confirmData.errors) throw new Error(confirmData.errors[0]?.message);
+            
+            // Also check the raw response for any 3DS / liability shift hints
+            const gqlResult = confirmData.data?.approveGooglePayPayment;
+            log('approveGooglePayPayment result: ' + JSON.stringify(gqlResult));
+
+            // ── Step 4: Real 3DS ──
+            setStep(4, 'running', '④ 3DS');
+            msg('⏳ Checking for 3DS...', 'info');
+
+            // Check order details for 3DS requirement
+            const detailRes = await fetch('/api/order-details/' + orderId);
+            const orderDetails = await detailRes.json();
+            log('=== Order details ===');
+            log('status: ' + orderDetails.status);
+            log('intent: ' + orderDetails.intent);
+            log('processing_instruction: ' + orderDetails.processing_instruction);
+            log('links: ' + JSON.stringify(orderDetails.links?.map(l => l.rel + ' -> ' + l.href.substring(0, 60))));
+            log('payment_source: ' + JSON.stringify(orderDetails.payment_source?.google_pay?.attributes));
+            log('=== END ===');
+
+            const needs3DS = orderDetails.status === 'PAYER_ACTION_REQUIRED'
+              || orderDetails.links?.some(l => l.rel === 'payer-action')
+              || orderDetails.payment_source?.google_pay?.attributes?.verification?.method === 'THREE_D_SECURE';
+            log('needs3DS detection: ' + needs3DS);
+
+            if (needs3DS) {
+              log('=== Real 3DS triggered ===');
+              setStep(4, '3ds', '④ 3DS ⚠');
+              msg('⏳ 3D Secure challenge required...', 'info');
+
+              const ThreeDomainSecure = await waitFor3DS();
+              const overlay = document.getElementById('threeds-overlay');
+              const container = document.getElementById('threeds-iframe-container');
+              container.innerHTML = '';
+              overlay.className = 'active';
+
+              const threedsInstance = ThreeDomainSecure({
+                createOrder: () => orderId,
+                onSuccess: (data) => {
+                  log('3DS success: ' + JSON.stringify(data));
+                  overlay.className = '';
+                  setStep(4, 'done', '④ 3DS ✓');
+                  msg('✅ 3D Secure verified!', 'success');
+                  captureOrder();
+                },
+                onCancel: () => {
+                  overlay.className = '';
+                  setStep(4, 'fail', '④ 3DS ✗');
+                  msg('⚠️ 3DS cancelled', 'error');
+                },
+                onError: (err) => {
+                  overlay.className = '';
+                  setStep(4, 'fail', '④ 3DS ✗');
+                  msg('❌ 3DS error: ' + (err.message || err), 'error');
+                },
+              });
+              threedsInstance.renderTo(container);
+            } else {
+              log('No 3DS required');
+              setStep(4, 'skip', '④ 3DS -');
+              captureOrder();
+            }
+          } catch (err) {
+            msg('❌ ' + err.message, 'error');
+            log('ERROR: ' + err.stack);
+          }
+        }
+      });
+
+      async function captureOrder() {
+        try {
+          setStep(5, 'running', '⑤ Capture');
+          msg('⏳ Capturing...', 'info');
+          const captureRes = await fetch('/api/capture-order', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ orderId })
+          });
+          const data = await captureRes.json();
+          log('Capture: ' + JSON.stringify(data));
+
+          if (data.status === 'COMPLETED') {
+            setStep(5, 'done', '⑤ Done ✓');
+            msg('✅ Payment successful! Order: ' + orderId, 'success');
+          } else if (data.name === 'ORDER_ALREADY_CAPTURED') {
+            setStep(5, 'done', '⑤ Done ✓');
+            msg('✅ Already captured!', 'success');
+          } else {
+            setStep(5, 'fail', '⑤ Capture ✗');
+            msg('❌ ' + (data.message || data.details?.[0]?.issue || 'Capture failed'), 'error');
+          }
+        } catch (err) {
+          setStep(5, 'fail', '⑤ Capture ✗');
+          msg('❌ ' + err.message, 'error');
+        }
+      }
+
+      document.getElementById('gp-container').innerHTML = '';
+      document.getElementById('gp-container').appendChild(button);
+      log('Button rendered ✓');
+      msg('✅ Tap to pay', 'success');
+    });
+  </script>
+</body>
+</html>
