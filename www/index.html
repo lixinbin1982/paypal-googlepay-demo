@@ -103,8 +103,8 @@
   <!-- Google Pay JS -->
   <script src="https://pay.google.com/gp/p/js/pay.js"></script>
 
-  <!-- PayPal JS SDK (for 3DS component) -->
-  <script src="https://www.paypal.com/sdk/js?client-id=AVJ64pXVas3BtB-YrVVMFfCAZx2r2RlEjn0TwRtpGGNxqhhR-DRILDWX8gONSh-jSgunDQucOrVplXtm&components=buttons,three-domain-secure&intent=capture&currency=USD"
+  <!-- PayPal JS SDK (Google Pay component handles GraphQL session internally) -->
+  <script src="https://www.paypal.com/sdk/js?client-id=AVJ64pXVas3BtB-YrVVMFfCAZx2r2RlEjn0TwRtpGGNxqhhR-DRILDWX8gONSh-jSgunDQucOrVplXtm&components=googlepay,three-domain-secure&intent=capture&currency=USD"
     data-sdk-integration-source="demo"
     data-namespace="paypalSdk">
   </script>
@@ -229,46 +229,45 @@
             orderId = order.id;
             log('Order: ' + orderId);
 
-            // ── Confirm GPay: Use GraphQL mutation (PayPal SDK's approach) ──
-            msg('⏳ Confirming GPay payment via GraphQL...', 'info');
-            const gqlRes = await fetch('/api/confirm-gpay', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
+            // ── Confirm GPay: Use PayPal SDK native confirmOrder (GraphQL from browser w/ cookies) ──
+            msg('⏳ Confirming GPay via PayPal SDK...', 'info');
+            let confirmResult;
+            try {
+              confirmResult = await paypalSdk.Googlepay().confirmOrder({
                 orderId,
                 paymentMethodData: paymentData.paymentMethodData,
-              })
-            });
-            const confirmData = await gqlRes.json();
-            log('=== GraphQL confirm response ===');
-            log(JSON.stringify(confirmData, null, 2));
+              });
+            } catch (sdkErr) {
+              // SDK might throw error that includes 3DS instruction
+              log('SDK confirmOrder threw: ' + sdkErr.message);
+              log(JSON.stringify(sdkErr));
+              // Even if it throws, the order might still be created — check order details
+              const detailRes = await fetch('/api/order-details/' + orderId);
+              const orderDetails = await detailRes.json();
+              log('Order status after SDK error: ' + orderDetails.status);
+              if (orderDetails.status === 'PAYER_ACTION_REQUIRED') {
+                // This is expected — 3DS is needed, we handle it below
+                confirmResult = { needs3DS: true };
+              } else {
+                throw sdkErr;
+              }
+            }
+            log('=== SDK confirm result ===');
+            log(JSON.stringify(confirmResult, null, 2));
             log('=== END ===');
             setStep(3, 'done', '③ Confirm ✓');
-            if (confirmData.errors) throw new Error(confirmData.errors[0]?.message);
-            
-            // Also check the raw response for any 3DS / liability shift hints
-            const gqlResult = confirmData.data?.approveGooglePayPayment;
-            log('approveGooglePayPayment result: ' + JSON.stringify(gqlResult));
 
             // ── Step 4: Real 3DS ──
             setStep(4, 'running', '④ 3DS');
             msg('⏳ Checking for 3DS...', 'info');
 
-            // Check order details for 3DS requirement
-            const detailRes = await fetch('/api/order-details/' + orderId);
-            const orderDetails = await detailRes.json();
-            log('=== Order details ===');
-            log('status: ' + orderDetails.status);
-            log('intent: ' + orderDetails.intent);
-            log('processing_instruction: ' + orderDetails.processing_instruction);
-            log('links: ' + JSON.stringify(orderDetails.links?.map(l => l.rel + ' -> ' + l.href.substring(0, 60))));
-            log('payment_source: ' + JSON.stringify(orderDetails.payment_source?.google_pay?.attributes));
-            log('=== END ===');
-
-            const needs3DS = orderDetails.status === 'PAYER_ACTION_REQUIRED'
-              || orderDetails.links?.some(l => l.rel === 'payer-action')
-              || orderDetails.payment_source?.google_pay?.attributes?.verification?.method === 'THREE_D_SECURE';
+            // Use SDK's initiatePayerAction for built-in 3DS handling
+            const needs3DS = confirmResult.needs3DS
+              || confirmResult?.liabilityShift?.threeDomainSecureAuthenticationEnrollment?.enrollmentStatus === 'ENROLLED';
             log('needs3DS detection: ' + needs3DS);
+            if (confirmResult.liabilityShift) {
+              log('liabilityShift: ' + JSON.stringify(confirmResult.liabilityShift));
+            }
 
             if (needs3DS) {
               log('=== Real 3DS triggered ===');

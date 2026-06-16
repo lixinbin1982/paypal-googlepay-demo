@@ -308,7 +308,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // Confirm payment source via REST API (supports SCA_ALWAYS for forced 3DS)
+  // Confirm payment source via REST API (uses OAuth2, no browser cookies needed)
   if (req.method === 'POST' && req.url === '/api/confirm-payment-source') {
     let body = '';
     req.on('data', chunk => body += chunk);
@@ -317,26 +317,35 @@ const server = http.createServer(async (req, res) => {
         const { orderId, paymentToken } = JSON.parse(body);
         const token = await getAccessToken();
 
+        // Try parsing paymentToken as JSON (might be {signature, signedMessage} format)
+        let resolvedToken = paymentToken;
+        try {
+          const parsed = JSON.parse(paymentToken);
+          if (parsed.signature && parsed.signedMessage) {
+            resolvedToken = parsed;
+            console.log('[debug] Token is JSON with signature+signedMessage');
+          }
+        } catch (e) {}
+        
+        const tokenFirstChars = typeof paymentToken === 'string' ? paymentToken.substring(0, 100) : JSON.stringify(paymentToken).substring(0,100);
+        console.log('[debug] Token starts with: ' + tokenFirstChars);
+
+        const confirmPayload = {
+          payment_source: {
+            google_pay: {
+              token: resolvedToken
+            }
+          }
+        };
+        console.log('[debug] confirm payload: ' + JSON.stringify(confirmPayload).substring(0, 300));
+
         const confirmRes = await fetch(`${PAYPAL_API}/v2/checkout/orders/${orderId}/confirm-payment-source`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${token}`,
           },
-          body: JSON.stringify({
-            payment_source: {
-              google_pay: {
-                token: paymentToken,
-                card: {
-                  attributes: {
-                    verification: {
-                      method: 'SCA_ALWAYS'  // Force 3DS
-                    }
-                  }
-                }
-              }
-            }
-          }),
+          body: JSON.stringify(confirmPayload),
         });
         const confirmData = await confirmRes.json();
         res.writeHead(200, { 'Content-Type': 'application/json' });
