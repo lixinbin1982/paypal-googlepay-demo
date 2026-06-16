@@ -214,6 +214,7 @@
           totalPrice: '132.97',
           currencyCode: 'USD',
         },
+        emailRequired: true,
       };
 
       // ── Render button ──
@@ -225,6 +226,8 @@
 
             const paymentData = await gpayClient.loadPaymentData(paymentDataRequest);
             log('GPay token ✓');
+            const gpayEmail = paymentData.email;
+            if (gpayEmail) log('GPay email: ' + gpayEmail);
             setStep(2, 'done', '② Pay ✓');
             setStep(3, 'running', '③ Confirm');
 
@@ -232,7 +235,7 @@
             const orderRes = await fetch('/api/create-order', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ amount: '132.97', currency: 'USD' })
+              body: JSON.stringify({ amount: '132.97', currency: 'USD', email: gpayEmail })
             });
             const order = await orderRes.json();
             orderId = order.id;
@@ -240,10 +243,12 @@
 
             // ── Confirm GPay via PayPal SDK (official doc flow) ──
             msg('⏳ Confirming GPay via PayPal SDK...', 'info');
-            const confirmResult = await paypalSdk.Googlepay().confirmOrder({
+            const confirmOpts = {
               orderId,
               paymentMethodData: paymentData.paymentMethodData,
-            });
+            };
+            if (gpayEmail) confirmOpts.email = gpayEmail;
+            const confirmResult = await paypalSdk.Googlepay().confirmOrder(confirmOpts);
             log('=== SDK confirm result ===');
             log(JSON.stringify(confirmResult, null, 2));
             log('=== END ===');

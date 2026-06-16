@@ -159,8 +159,16 @@ const server = http.createServer(async (req, res) => {
     req.on('data', chunk => body += chunk);
     req.on('end', async () => {
       try {
-        const { amount, currency } = JSON.parse(body);
+        const { amount, currency, email } = JSON.parse(body);
         const token = await getAccessToken();
+
+        const orderPayload = {
+          intent: 'CAPTURE',
+          purchase_units: [{
+            amount: { currency_code: currency || 'USD', value: amount || '132.97' }
+          }]
+        };
+        if (email) orderPayload.payer = { email_address: email };
 
         const orderRes = await fetch(`${PAYPAL_API}/v2/checkout/orders`, {
           method: 'POST',
@@ -168,12 +176,7 @@ const server = http.createServer(async (req, res) => {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${token}`,
           },
-          body: JSON.stringify({
-            intent: 'CAPTURE',
-            purchase_units: [{
-              amount: { currency_code: currency || 'USD', value: amount || '132.97' }
-            }]
-          }),
+          body: JSON.stringify(orderPayload),
         });
         const orderData = await orderRes.json();
 
