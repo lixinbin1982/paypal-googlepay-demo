@@ -1,26 +1,26 @@
 # Google Pay + PayPal 3DS Demo
 
-Google Pay 整合 PayPal 嘅完整 demo，支援 3D Secure 驗證。
+A complete demo of Google Pay integration with PayPal, featuring 3D Secure authentication support.
 
-## 事前準備
+## Prerequisites
 
-1. **PayPal Sandbox Account** — 一個 PayPal Developer 帳號
-2. **Google Pay API 開通** — 去 [Google Pay API Console](https://console.cloud.google.com/google-pay) enable
-3. **Browser 加測試卡** — Chrome > Settings > Payment methods > Add card
+1. **PayPal Sandbox Account** — sign up at [PayPal Developer](https://developer.paypal.com)
+2. **Google Pay API** — enable via [Google Pay API Console](https://console.cloud.google.com/google-pay)
+3. **Add test cards** — Chrome > Settings > Payment methods > Add card
 
-### 測試卡（Google Pay Sandbox）
+### Test Cards (Google Pay Sandbox)
 
-| Card Number | 用途 |
+| Card Number | Purpose |
 |---|---|
-| `4111111111111111` | Visa 普通卡（成功付款） |
+| `4111111111111111` | Visa success (no 3DS) |
 | `4000000000001091` | Visa 3DS Challenge Required |
 | `4000000000001109` | Visa 3DS Frictionless |
-| `4222222222222222` | Mastercard 普通卡 |
-| `5555555555554444` | Mastercard 普通卡 |
+| `4222222222222222` | Mastercard success |
+| `5555555555554444` | Mastercard success |
 
-> 去 Chrome Settings > Payment methods > Add card，填以上 card number + 任意 expiry/CVC
+> Add these in Chrome Settings > Payment methods > Add card (any expiry/CVC works)
 
-## 快速開始
+## Quick Start
 
 ```bash
 # 1. Clone
@@ -30,25 +30,25 @@ cd paypal-googlepay-demo
 # 2. Install
 npm install
 
-# 3. 開 server
+# 3. Start server
 node server.js
 
-# 4. 開 browser，去
+# 4. Open browser
 http://localhost:4001
 ```
 
-## 所需 Credentials
+## Credentials
 
-喺 `server.js` 最頂：
+At the top of `server.js`:
 
 ```javascript
-const CLIENT_ID = '你的 PayPal REST API Client ID';
-const CLIENT_SECRET = '你的 PayPal REST API Secret';
+const CLIENT_ID = 'your PayPal REST API Client ID';
+const CLIENT_SECRET = 'your PayPal REST API Secret';
 ```
 
-去 [PayPal Developer Dashboard](https://developer.paypal.com/dashboard/applications) → **REST API Apps** 搵到。
+Get these from [PayPal Developer Dashboard](https://developer.paypal.com/dashboard/applications) → **REST API Apps**.
 
-## 個 Flow
+## Flow
 
 ```
 Browser                          Server                       PayPal
@@ -77,30 +77,30 @@ Browser                          Server                       PayPal
 
 ## API Endpoints
 
-| Endpoint | Method | 用途 |
+| Endpoint | Method | Description |
 |---|---|---|
-| `/api/gpay-config` | GET | 攞 Google Pay config（PayPal SDK config） |
-| `/api/create-order` | POST | 建立 PayPal order |
+| `/api/gpay-config` | GET | Fetch Google Pay config via PayPal SDK |
+| `/api/create-order` | POST | Create a PayPal order |
 | `/api/order-details/:id` | GET | Check order status |
-| `/api/capture-order` | POST | Capture 訂單 |
-| `/api/confirm-payment-source` | POST | (備用) REST API confirm |
-| `/api/confirm-gpay` | POST | (備用) GraphQL confirm proxy |
+| `/api/capture-order` | POST | Capture the order |
+| `/api/confirm-payment-source` | POST | (Fallback) REST API confirm |
+| `/api/confirm-gpay` | POST | (Fallback) GraphQL confirm proxy |
 
-## 點解咁樣設計？
+## Architecture Decisions
 
 ### Server Proxy
-PayPal API 要求 server-side OAuth2 token，browser 直接 call 會被 CORS block。所以全部 REST API call 都經過 server proxy。
+PayPal REST API requires server-side OAuth2 tokens. Direct browser calls get blocked by CORS, so all REST API calls go through an internal server proxy.
 
 ### SDK Native Confirm
-`confirmOrder()` 用 PayPal JS SDK 嘅 `Googlepay().confirmOrder()` 直接喺 browser call PayPal GraphQL — SDK 會帶 cookies/headers，PayPal 先識得 decrypt Google Pay token。
+`confirmOrder()` uses the PayPal JS SDK's built-in `Googlepay().confirmOrder()` to call PayPal GraphQL directly from the browser. The SDK sends the necessary cookies and auth headers — without them, PayPal can't decrypt the Google Pay token.
 
 ### 3DS
-當張卡需要 3DS 驗證，PayPal 會 return `PAYER_ACTION_REQUIRED`，前端用 `ThreeDomainSecure` component 開 iframe 做驗證，完成後先 capture。
+When a card requires 3DS authentication, PayPal returns `PAYER_ACTION_REQUIRED`. The frontend uses the `ThreeDomainSecure` component to show a 3DS challenge iframe, then captures the order on success.
 
-> **注意：** Google Pay TEST 環境嘅 token 有機會唔支援 3DS test cards，但 production 用 real card 係正常嘅。
+> **Note:** Google Pay TEST tokens may not support 3DS test cards in sandbox. Production real-card tokens work correctly.
 
 ## Tech Stack
 
 - **Frontend:** Vanilla JS + Google Pay API + PayPal JS SDK
-- **Backend:** Node.js (raw http) — no Express, zero dependencies
-- **SSL:** ngrok (for mobile testing)
+- **Backend:** Node.js (raw http) — zero external dependencies
+- **SSL/Tunnel:** ngrok (for mobile / external testing)
