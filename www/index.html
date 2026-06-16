@@ -79,6 +79,15 @@
       <div id="gp-container">
         <p style="color:#999;font-size:13px">Loading Google Pay...</p>
       </div>
+
+      <div style="margin-top:16px;padding:12px;background:#fff3cd;border-radius:8px;font-size:12px;color:#856404;">
+        <strong>🔬 3DS Test:</strong> Add one of these cards in
+        <strong>Chrome &gt; Settings &gt; Payment methods</strong> :<br>
+        <code style="background:#fff8e1;padding:2px 6px;border-radius:3px">4653041108355344</code> Visa 3DS Challenge (US)<br>
+        <code style="background:#fff8e1;padding:2px 6px;border-radius:3px">5147552104214336</code> Mastercard 3DS Challenge (US)<br>
+        <code style="background:#fff8e1;padding:2px 6px;border-radius:3px">4566201562849481</code> Visa Non-3DS (US)
+      </div>
+
       <div id="msg"></div>
       <button class="btn-trace" id="traceBtn" onclick="toggleTrace()">Show Debug Log</button>
       <div class="log-box" id="logBox"></div>
@@ -229,82 +238,97 @@
             orderId = order.id;
             log('Order: ' + orderId);
 
-            // ── Confirm GPay: Use PayPal SDK native confirmOrder (GraphQL from browser w/ cookies) ──
+            // ── Confirm GPay via PayPal SDK (official doc flow) ──
             msg('⏳ Confirming GPay via PayPal SDK...', 'info');
-            let confirmResult;
-            try {
-              confirmResult = await paypalSdk.Googlepay().confirmOrder({
-                orderId,
-                paymentMethodData: paymentData.paymentMethodData,
-              });
-            } catch (sdkErr) {
-              // SDK might throw error that includes 3DS instruction
-              log('SDK confirmOrder threw: ' + sdkErr.message);
-              log(JSON.stringify(sdkErr));
-              // Even if it throws, the order might still be created — check order details
-              const detailRes = await fetch('/api/order-details/' + orderId);
-              const orderDetails = await detailRes.json();
-              log('Order status after SDK error: ' + orderDetails.status);
-              if (orderDetails.status === 'PAYER_ACTION_REQUIRED') {
-                // This is expected — 3DS is needed, we handle it below
-                confirmResult = { needs3DS: true };
-              } else {
-                throw sdkErr;
-              }
-            }
+            const confirmResult = await paypalSdk.Googlepay().confirmOrder({
+              orderId,
+              paymentMethodData: paymentData.paymentMethodData,
+            });
             log('=== SDK confirm result ===');
             log(JSON.stringify(confirmResult, null, 2));
             log('=== END ===');
             setStep(3, 'done', '③ Confirm ✓');
 
-            // ── Step 4: Real 3DS ──
+            // ── Step 4: Check for PAYER_ACTION_REQUIRED (3DS) ──
             setStep(4, 'running', '④ 3DS');
-            msg('⏳ Checking for 3DS...', 'info');
+            // ── Step 4: Force initiatePayerAction to trigger 3DS if available ──
+            setStep(4, 'running', '④ 3DS');
+            msg('⏳ Attempting 3DS via initiatePayerAction...', 'info');
+            log('confirmResult.status: ' + confirmResult.status);
 
-            // Use SDK's initiatePayerAction for built-in 3DS handling
-            const needs3DS = confirmResult.needs3DS
-              || confirmResult?.liabilityShift?.threeDomainSecureAuthenticationEnrollment?.enrollmentStatus === 'ENROLLED';
-            log('needs3DS detection: ' + needs3DS);
-            if (confirmResult.liabilityShift) {
-              log('liabilityShift: ' + JSON.stringify(confirmResult.liabilityShift));
-            }
+            try {
+              log('=== Calling initiatePayerAction ===');
+              const payerActionResult = await paypalSdk.Googlepay().initiatePayerAction({ orderId });
+              log('initiatePayerAction done: ' + JSON.stringify(payerActionResult));
 
-            if (needs3DS) {
-              log('=== Real 3DS triggered ===');
-              setStep(4, '3ds', '④ 3DS ⚠');
-              msg('⏳ 3D Secure challenge required...', 'info');
+              const liabilityShift = payerActionResult?.liabilityShift;
+              log('liabilityShift: ' + JSON.stringify(liabilityShift));
 
-              const ThreeDomainSecure = await waitFor3DS();
-              const overlay = document.getElementById('threeds-overlay');
-              const container = document.getElementById('threeds-iframe-container');
-              container.innerHTML = '';
-              overlay.className = 'active';
+              if (liabilityShift && liabilityShift !== 'UNKNOWN' && liabilityShift !== 'NO_SHIFT') {
+                setStep(4, 'done', '④ 3DS ✓');
+                msg('✅ 3D Secure verified!', 'success');
+              } else if (liabilityShift === 'NO_SHIFT' || payerActionResult?.status === 'COMPLETED') {
+                log('No 3DS needed for this card');
+                setStep(4, 'skip', '④ 3DS -');
+              } else {
+                log('3DS result uncertain — continuing');
+                setStep(4, 'skip', '④ 3DS ?');
+              }
 
-              const threedsInstance = ThreeDomainSecure({
-                createOrder: () => orderId,
-                onSuccess: (data) => {
-                  log('3DS success: ' + JSON.stringify(data));
-                  overlay.className = '';
-                  setStep(4, 'done', '④ 3DS ✓');
-                  msg('✅ 3D Secure verified!', 'success');
-                  captureOrder();
-                },
-                onCancel: () => {
-                  overlay.className = '';
-                  setStep(4, 'fail', '④ 3DS ✗');
-                  msg('⚠️ 3DS cancelled', 'error');
-                },
-                onError: (err) => {
-                  overlay.className = '';
-                  setStep(4, 'fail', '④ 3DS ✗');
-                  msg('❌ 3DS error: ' + (err.message || err), 'error');
-                },
-              });
-              threedsInstance.renderTo(container);
-            } else {
-              log('No 3DS required');
-              setStep(4, 'skip', '④ 3DS -');
+              // Verify order details
+              const detailRes = await fetch('/api/order-details/' + orderId);
+              const orderDetails = await detailRes.json();
+              log('Order payment_source: ' + JSON.stringify(orderDetails.payment_source?.google_pay));
+
               captureOrder();
+            } catch (payerErr) {
+              log('initiatePayerAction threw: ' + payerErr.message);
+              log(JSON.stringify(payerErr));
+
+              // Fallback: check order details for PAYER_ACTION_REQUIRED
+              const detailRes = await fetch('/api/order-details/' + orderId);
+              const orderDetails = await detailRes.json();
+              log('Order status: ' + orderDetails.status);
+
+              if (orderDetails.status === 'PAYER_ACTION_REQUIRED') {
+                // 3DS needed — use ThreeDomainSecure component directly
+                setStep(4, '3ds', '④ 3DS ⚠');
+                msg('⏳ 3D Secure challenge...', 'info');
+
+                const ThreeDomainSecure = await waitFor3DS();
+                const overlay = document.getElementById('threeds-overlay');
+                const container = document.getElementById('threeds-iframe-container');
+                container.innerHTML = '';
+                overlay.className = 'active';
+
+                await new Promise((resolve, reject) => {
+                  const instance = ThreeDomainSecure({
+                    createOrder: () => orderId,
+                    onSuccess: (data) => {
+                      log('3DS success: ' + JSON.stringify(data));
+                      overlay.className = '';
+                      resolve(data);
+                    },
+                    onCancel: () => {
+                      overlay.className = '';
+                      reject(new Error('3DS cancelled'));
+                    },
+                    onError: (err) => {
+                      overlay.className = '';
+                      reject(err);
+                    },
+                  });
+                  instance.renderTo(container);
+                });
+
+                setStep(4, 'done', '④ 3DS ✓');
+                msg('✅ 3D Secure passed!', 'success');
+                captureOrder();
+              } else {
+                log('No 3DS needed');
+                setStep(4, 'skip', '④ 3DS -');
+                captureOrder();
+              }
             }
           } catch (err) {
             msg('❌ ' + err.message, 'error');
@@ -346,6 +370,8 @@
       log('Button rendered ✓');
       msg('✅ Tap to pay', 'success');
     });
+
+    // ── (Force 3DS card button removed — using PayPal official flow above) ──
   </script>
 </body>
 </html>
